@@ -108,6 +108,7 @@ PermitRootLogin no
 PubkeyAuthentication yes
 PasswordAuthentication no
 PermitEmptyPasswords no
+AuthenticationMethods publickey
 ChallengeResponseAuthentication no
 UsePAM yes
 X11Forwarding no
@@ -224,6 +225,7 @@ log_info "Step 6: Installing and configuring auditd..."
 apt install -y auditd audispd-plugins
 
 # Add custom audit rules
+mkdir -p /etc/systemd/journald.conf.d
 cat > /etc/audit/rules.d/custom.rules << 'EOF'
 # Monitor authentication events
 -w /var/log/auth.log -p wa -k auth_log
