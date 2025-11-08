@@ -21,7 +21,7 @@ readonly SCRIPT_VERSION="2.0"
 readonly PROGRESS_FILE="/var/log/hardening-progress.log"
 readonly STEP_FILE="/var/tmp/hardening-step"
 readonly LOCK_FILE="/var/lock/hardening-script.lock"
-readonly TOTAL_STEPS=13
+readonly TOTAL_STEPS=14
 
 # Color codes
 readonly RED='\033[0;31m'
@@ -49,6 +49,7 @@ declare -a STEP_NAMES=(
     "Persistent Logging"
     "AIDE"
     "Additional Security"
+    "Cleanup"
 )
 
 # ============================================================================
@@ -221,6 +222,7 @@ Steps:
   11 - Persistent logging
   12 - AIDE
   13 - Additional hardening
+  14 - Cleanup
 
 Environment Variables:
   USER_PASSWORD   - Optional: Password for new user (for automation)
@@ -777,6 +779,31 @@ EOF
     sysctl -p /etc/sysctl.d/99-security.conf >/dev/null
 
     save_progress 13
+fi
+
+# ============================================================================
+# STEP 14: CLEANUP
+# ============================================================================
+if [ $START_FROM_STEP -le 14 ]; then
+    LAST_STEP=14
+    log_info "Step 14/$TOTAL_STEPS: Cleaning up temporary files..."
+
+    # Remove temporary files
+    rm -f /tmp/sshd-custom.conf 2>/dev/null || true
+    rm -f /var/tmp/hardening-apt-updated 2>/dev/null || true
+
+    # Clean up old backup files older than 30 days
+    find /etc -name "*.backup-*" -type f -mtime +30 -delete 2>/dev/null || true
+
+    # Clean apt cache
+    apt clean
+    apt autoclean
+
+    # Remove lock file
+    rm -f "$LOCK_FILE" 2>/dev/null || true
+
+    log_info "Cleanup completed."
+    save_progress 14
 fi
 
 # ============================================================================
