@@ -33,9 +33,9 @@ fi
 # ============================================================================
 # CONFIGURATION - CUSTOMIZE THESE VALUES BEFORE RUNNING
 # ============================================================================
-NEW_USER=""           # Replace with your desired username
-SSH_PORT=""                    # Replace with your desired SSH port (1024-65535)
-SSH_PUBLIC_KEY=""  # Replace with your actual SSH public key
+NEW_USER="YOUR_USERNAME"           # Replace with your desired username
+SSH_PORT="22"                    # Replace with your desired SSH port (1024-65535)
+SSH_PUBLIC_KEY="YOUR_SSH_PUBLIC_KEY_HERE"  # Replace with your actual SSH public key
 
 # Validation
 if [[ "$NEW_USER" == "YOUR_USERNAME" ]] || [[ "$SSH_PUBLIC_KEY" == "YOUR_SSH_PUBLIC_KEY_HERE" ]]; then
