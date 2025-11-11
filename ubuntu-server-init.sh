@@ -21,7 +21,7 @@ readonly SCRIPT_VERSION="2.0"
 readonly PROGRESS_FILE="/var/log/hardening-progress.log"
 readonly STEP_FILE="/var/tmp/hardening-step"
 readonly LOCK_FILE="/var/lock/hardening-script.lock"
-readonly TOTAL_STEPS=14
+readonly TOTAL_STEPS=15
 
 # Color codes
 readonly RED='\033[0;31m'
@@ -32,6 +32,7 @@ readonly NC='\033[0m'
 # Global variables
 LAST_STEP=0
 START_FROM_STEP=0
+DOCKER_INSTALLED=false
 
 # Step names for error reporting
 declare -a STEP_NAMES=(
@@ -41,6 +42,7 @@ declare -a STEP_NAMES=(
     "SSH Hardening"
     "Fail2ban"
     "UFW Firewall"
+    "Docker + ufw-docker"
     "Auditd"
     "File Permissions"
     "Lynis"
@@ -214,15 +216,16 @@ Steps:
   3  - SSH hardening
   4  - Fail2ban
   5  - UFW firewall
-  6  - Auditd
-  7  - File permissions
-  8  - Lynis
-  9  - Rkhunter
-  10 - Secure shared memory
-  11 - Persistent logging
-  12 - AIDE
-  13 - Additional hardening
-  14 - Cleanup
+  6  - Docker + ufw-docker (optional)
+  7  - Auditd
+  8  - File permissions
+  9  - Lynis
+  10 - Rkhunter
+  11 - Secure shared memory
+  12 - Persistent logging
+  13 - AIDE
+  14 - Additional hardening
+  15 - Cleanup
 
 Environment Variables:
   USER_PASSWORD   - Optional: Password for new user (for automation)
@@ -415,6 +418,9 @@ ClientAliveInterval 300
 ClientAliveCountMax 2
 LoginGraceTime 60
 Protocol 2
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256
 EOF
 
     # Set up SSH keys for new user
@@ -445,6 +451,7 @@ EOF
             systemctl restart ssh
             save_progress 3
             log_info "SSH configuration updated. New port: $SSH_PORT"
+            log_info "Enhanced cipher restrictions applied."
             log_warn "IMPORTANT: Test SSH connection on new port before logging out!"
             log_warn "Test command: ssh -p $SSH_PORT $NEW_USER@<server-ip>"
         else
@@ -542,11 +549,71 @@ if [ $START_FROM_STEP -le 5 ]; then
 fi
 
 # ============================================================================
-# STEP 6: AUDITD
+# STEP 6: DOCKER + UFW-DOCKER (OPTIONAL)
 # ============================================================================
 if [ $START_FROM_STEP -le 6 ]; then
     LAST_STEP=6
-    log_info "Step 6/$TOTAL_STEPS: Installing and configuring auditd..."
+    log_info "Step 6/$TOTAL_STEPS: Docker + ufw-docker (optional)..."
+
+    INSTALL_DOCKER=false
+
+    if [ -t 0 ]; then
+        read -p "Do you want to install Docker and ufw-docker? [y/N] " -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            INSTALL_DOCKER=true
+        fi
+    else
+        log_info "Non-interactive mode: skipping Docker installation."
+    fi
+
+    if [ "$INSTALL_DOCKER" = true ]; then
+        log_info "Installing Docker Engine using official convenience script..."
+
+        # Install Docker using official convenience script
+        curl -fsSL https://get.docker.com | sh
+
+        log_info "Docker Engine installed successfully."
+
+        # Add user to docker group
+        usermod -aG docker "$NEW_USER"
+        log_info "User '$NEW_USER' added to docker group."
+
+        # Install ufw-docker
+        log_info "Installing ufw-docker..."
+        curl -fsSL https://github.com/chaifeng/ufw-docker/raw/master/ufw-docker -o /usr/local/bin/ufw-docker
+        chmod +x /usr/local/bin/ufw-docker
+
+        # Run ufw-docker install
+        /usr/local/bin/ufw-docker install
+
+        # Restart UFW
+        systemctl restart ufw
+
+        log_info "ufw-docker installed and configured."
+        log_info ""
+        log_info "Usage example:"
+        log_info "  # Allow external access to a container's port:"
+        log_info "  sudo ufw-docker allow <container-name> 80"
+        log_info ""
+        log_info "  # Delete a rule:"
+        log_info "  sudo ufw-docker delete allow <container-name> 80"
+        log_info ""
+
+        DOCKER_INSTALLED=true
+    else
+        log_info "Skipping Docker installation."
+    fi
+
+    save_progress 6
+fi
+
+# ============================================================================
+# STEP 7: AUDITD
+# ============================================================================
+if [ $START_FROM_STEP -le 7 ]; then
+    LAST_STEP=7
+    log_info "Step 7/$TOTAL_STEPS: Installing and configuring auditd..."
 
     apt install -y auditd audispd-plugins
 
@@ -578,20 +645,20 @@ EOF
     systemctl restart auditd
 
     if systemctl is-active --quiet auditd; then
-        save_progress 6
+        save_progress 7
         log_info "Auditd configured with custom rules."
     else
         log_warn "Auditd may not have started properly. Check: systemctl status auditd"
-        save_progress 6
+        save_progress 7
     fi
 fi
 
 # ============================================================================
-# STEP 7: FILE PERMISSIONS
+# STEP 8: FILE PERMISSIONS
 # ============================================================================
-if [ $START_FROM_STEP -le 7 ]; then
-    LAST_STEP=7
-    log_info "Step 7/$TOTAL_STEPS: Setting secure file permissions..."
+if [ $START_FROM_STEP -le 8 ]; then
+    LAST_STEP=8
+    log_info "Step 8/$TOTAL_STEPS: Setting secure file permissions..."
 
     # Critical system files
     chmod 700 /root
@@ -607,29 +674,29 @@ if [ $START_FROM_STEP -le 7 ]; then
         find /etc/ssh/sshd_config.d -type f -exec chmod 600 {} \; 2>/dev/null || true
     fi
 
-    save_progress 7
+    save_progress 8
     log_info "File permissions secured."
 fi
 
 # ============================================================================
-# STEP 8: LYNIS
+# STEP 9: LYNIS
 # ============================================================================
-if [ $START_FROM_STEP -le 8 ]; then
-    LAST_STEP=8
-    log_info "Step 8/$TOTAL_STEPS: Installing Lynis security audit tool..."
+if [ $START_FROM_STEP -le 9 ]; then
+    LAST_STEP=9
+    log_info "Step 9/$TOTAL_STEPS: Installing Lynis security audit tool..."
 
     apt install -y lynis
 
-    save_progress 8
+    save_progress 9
     log_info "Lynis installed. Run 'sudo lynis audit system' to perform security audit."
 fi
 
 # ============================================================================
-# STEP 9: RKHUNTER
+# STEP 10: RKHUNTER
 # ============================================================================
-if [ $START_FROM_STEP -le 9 ]; then
-    LAST_STEP=9
-    log_info "Step 9/$TOTAL_STEPS: Installing and configuring rkhunter..."
+if [ $START_FROM_STEP -le 10 ]; then
+    LAST_STEP=10
+    log_info "Step 10/$TOTAL_STEPS: Installing and configuring rkhunter..."
 
     apt install -y rkhunter
 
@@ -645,16 +712,16 @@ if [ $START_FROM_STEP -le 9 ]; then
     rkhunter --update 2>&1 | grep -v "Warning:" || true
     rkhunter --propupd 2>&1 | grep -v "Warning:" || true
 
-    save_progress 9
+    save_progress 10
     log_info "Rkhunter installed and configured."
 fi
 
 # ============================================================================
-# STEP 10: SECURE SHARED MEMORY
+# STEP 11: SECURE SHARED MEMORY
 # ============================================================================
-if [ $START_FROM_STEP -le 10 ]; then
-    LAST_STEP=10
-    log_info "Step 10/$TOTAL_STEPS: Securing shared memory..."
+if [ $START_FROM_STEP -le 11 ]; then
+    LAST_STEP=11
+    log_info "Step 11/$TOTAL_STEPS: Securing shared memory..."
 
     if ! grep -q "tmpfs.*\/run\/shm" /etc/fstab; then
         backup_file /etc/fstab
@@ -664,15 +731,15 @@ if [ $START_FROM_STEP -le 10 ]; then
         log_warn "Shared memory entry already exists in /etc/fstab"
     fi
 
-    save_progress 10
+    save_progress 11
 fi
 
 # ============================================================================
-# STEP 11: PERSISTENT LOGGING
+# STEP 12: PERSISTENT LOGGING
 # ============================================================================
-if [ $START_FROM_STEP -le 11 ]; then
-    LAST_STEP=11
-    log_info "Step 11/$TOTAL_STEPS: Enabling persistent journald logging..."
+if [ $START_FROM_STEP -le 12 ]; then
+    LAST_STEP=12
+    log_info "Step 12/$TOTAL_STEPS: Enabling persistent journald logging..."
 
     mkdir -p /var/log/journal
     systemd-tmpfiles --create --prefix /var/log/journal
@@ -689,16 +756,16 @@ SystemMaxFileSize=100M
 EOF
 
     systemctl restart systemd-journald
-    save_progress 11
+    save_progress 12
     log_info "Persistent logging enabled."
 fi
 
 # ============================================================================
-# STEP 12: AIDE
+# STEP 13: AIDE
 # ============================================================================
-if [ $START_FROM_STEP -le 12 ]; then
-    LAST_STEP=12
-    log_info "Step 12/$TOTAL_STEPS: Installing AIDE (this may take several minutes)..."
+if [ $START_FROM_STEP -le 13 ]; then
+    LAST_STEP=13
+    log_info "Step 13/$TOTAL_STEPS: Installing AIDE (this may take several minutes)..."
 
     apt install -y aide aide-common
 
@@ -723,16 +790,16 @@ if [ $START_FROM_STEP -le 12 ]; then
 EOF
     chmod +x /etc/cron.weekly/aide-check
 
-    save_progress 12
+    save_progress 13
     log_info "AIDE configured."
 fi
 
 # ============================================================================
-# STEP 13: ADDITIONAL SECURITY
+# STEP 14: ADDITIONAL SECURITY
 # ============================================================================
-if [ $START_FROM_STEP -le 13 ]; then
-    LAST_STEP=13
-    log_info "Step 13/$TOTAL_STEPS: Applying additional security hardening..."
+if [ $START_FROM_STEP -le 14 ]; then
+    LAST_STEP=14
+    log_info "Step 14/$TOTAL_STEPS: Applying additional security hardening..."
 
     # Disable core dumps
     cat > /etc/security/limits.d/disable-coredumps.conf << 'EOF'
@@ -778,15 +845,15 @@ EOF
 
     sysctl -p /etc/sysctl.d/99-security.conf >/dev/null
 
-    save_progress 13
+    save_progress 14
 fi
 
 # ============================================================================
-# STEP 14: CLEANUP
+# STEP 15: CLEANUP
 # ============================================================================
-if [ $START_FROM_STEP -le 14 ]; then
-    LAST_STEP=14
-    log_info "Step 14/$TOTAL_STEPS: Cleaning up temporary files..."
+if [ $START_FROM_STEP -le 15 ]; then
+    LAST_STEP=15
+    log_info "Step 15/$TOTAL_STEPS: Cleaning up temporary files..."
 
     # Remove temporary files
     rm -f /tmp/sshd-custom.conf 2>/dev/null || true
@@ -803,7 +870,7 @@ if [ $START_FROM_STEP -le 14 ]; then
     rm -f "$LOCK_FILE" 2>/dev/null || true
 
     log_info "Cleanup completed."
-    save_progress 14
+    save_progress 15
 fi
 
 # ============================================================================
@@ -826,8 +893,16 @@ cat << EOF
 ✓ System updated and automatic security updates enabled
 ✓ New user '$NEW_USER' created with sudo privileges
 ✓ SSH hardened (port: $SSH_PORT, key-only auth, root login disabled)
+✓ SSH cipher restrictions enhanced (ChaCha20-Poly1305, AES256-GCM, etc.)
 ✓ Fail2ban installed and configured
 ✓ UFW firewall enabled
+EOF
+
+if [ "$DOCKER_INSTALLED" = true ]; then
+    echo "✓ Docker Engine and ufw-docker installed"
+fi
+
+cat << EOF
 ✓ Auditd installed with custom rules
 ✓ File permissions secured
 ✓ Lynis security audit tool installed
@@ -854,8 +929,33 @@ cat << EOF
    sudo journalctl -xe
    sudo tail -f /var/log/auth.log
    sudo cat $PROGRESS_FILE
+EOF
+
+if [ "$DOCKER_INSTALLED" = true ]; then
+    cat << EOF
+
+5. Docker and ufw-docker usage:
+   # User '$NEW_USER' needs to re-login for docker group changes
+
+   # Allow external access to a container's port:
+   sudo ufw-docker allow <container-name> 80
+
+   # Delete a rule:
+   sudo ufw-docker delete allow <container-name> 80
+
+   # List Docker container IPs:
+   docker inspect --format='{{.Name}}: {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \$(docker ps -q)
+
+6. Reboot to apply all changes:
+EOF
+else
+    cat << EOF
 
 5. Reboot to apply all changes:
+EOF
+fi
+
+cat << EOF
    sudo reboot
 
 ============================================================================
